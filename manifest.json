@@ -1,7 +1,7 @@
 {
-  "name": "Energía Vital",
-  "short_name": "Energía",
-  "description": "Tu pirámide de Estar Bien — control diario de alimentación, sueño, ejercicio, relaciones y tiempo para ti",
+  "name": "ViveApp",
+  "short_name": "ViveApp",
+  "description": "Activa tu energía. Avanza con claridad. Una app para tu mente en acción.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

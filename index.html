@@ -4,13 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#797084">
-<title>Energía Vital</title>
+<title>ViveApp — Activa tu energía</title>
+<meta name="description" content="ViveApp. Activa tu energía. Avanza con claridad. Una app para tu mente en acción.">
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" type="image/png" href="./favicon.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Energía Vital">
+<meta name="apple-mobile-web-app-title" content="ViveApp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
   --peach: #ffc0a5; --mauve: #c492a1; --slate: #797084;
@@ -21,7 +25,7 @@
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 html, body {
-  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   background: linear-gradient(180deg, #faf7f4 0%, #f3eef0 100%);
   color: var(--text); line-height: 1.5;
   min-height: 100vh; -webkit-font-smoothing: antialiased; font-size: 16px;
@@ -61,6 +65,19 @@ body { padding: 0 0 calc(48px + env(safe-area-inset-bottom)); }
 .dropdown-action { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; border: none; background: transparent; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; color: var(--text); text-align: left; }
 .dropdown-action:hover { background: #f5f2f5; }
 .dropdown-sep { height: 1px; background: var(--line); margin: 6px 0; }
+.sync-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; background: var(--card);
+  border: 1px solid var(--line); border-radius: 99px;
+  font-size: 11px; color: var(--muted);
+  white-space: nowrap;
+}
+.sync-status[data-state="ok"] { color: #2d7551; border-color: rgba(45,117,81,0.2); }
+.sync-status[data-state="syncing"] { color: var(--slate); }
+.sync-status[data-state="pending"] { color: #c2693f; }
+.sync-status[data-state="error"] { color: #d77b6e; border-color: rgba(215,123,110,0.3); }
+.sync-status[data-state="logged-out"] { color: #d77b6e; border-color: rgba(215,123,110,0.3); }
+
 .backup-status { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 99px; font-size: 12px; color: var(--muted); cursor: pointer; transition: all .15s; }
 .backup-status:hover { border-color: var(--slate); }
 .backup-dot { width: 8px; height: 8px; border-radius: 50%; background: #d6cfd6; }
@@ -296,12 +313,13 @@ footer a:hover { color: var(--text); }
 
 <div class="topbar">
   <div class="topbar-inner">
-    <div class="brand"><span class="leaf">🌿</span> <span class="brand-text">Energía Vital</span></div>
+    <div class="brand"><span class="leaf">🌿</span> <span class="brand-text">ViveApp</span></div>
     <nav class="main-nav">
       <button class="nav-item active" data-view="energia" onclick="switchView('energia')">Energía</button>
       <button class="nav-item" data-view="avances" onclick="switchView('avances')">Avances</button>
     </nav>
     <div class="spacer"></div>
+    <span id="syncStatus" class="sync-status" style="display:none"></span>
     <div class="backup-status" id="backupStatus" onclick="onBackupClick()">
       <span class="backup-dot"></span>
       <span id="backupText">...</span>
@@ -629,32 +647,35 @@ footer a:hover { color: var(--text); }
 </div></div>
 
 <div class="modal login-modal" id="authLoginModal"><div class="login-card">
-  <h2>🌿 Energía Vital</h2>
-  <div class="sub">Inicia sesión para continuar.</div>
+  <h2>🌿 ViveApp</h2>
+  <div class="sub" style="font-style: italic;">Activa tu energía. Avanza con claridad.</div>
+  <div class="sub" style="margin-top: 10px;">Inicia sesión para continuar.</div>
   <label style="display:block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px;">Email</label>
   <input type="email" id="authEmail" placeholder="tu@email.com" autocomplete="email" style="width:100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; font-family: inherit; font-size: 16px;" onkeydown="if(event.key==='Enter') document.getElementById('authPassword').focus()">
   <label style="display:block; font-size: 12.5px; font-weight: 600; margin: 12px 0 6px;">Contraseña</label>
   <input type="password" id="authPassword" placeholder="••••••" autocomplete="current-password" style="width:100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; font-family: inherit; font-size: 16px;" onkeydown="if(event.key==='Enter') tryLogin()">
   <div id="authError" style="color: #d77b6e; font-size: 12.5px; margin-top: 10px; display: none; padding: 8px 12px; background: rgba(215,123,110,0.08); border-radius: 8px;"></div>
   <button class="add-submit" style="margin-top: 18px; width:100%;" onclick="tryLogin()">Iniciar sesión</button>
+  <button class="btn" style="margin-top: 8px; width:100%;" onclick="closeModal('authLoginModal'); openModal('firstRunModal');">Crear cuenta nueva</button>
   <div class="login-link" style="margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 11.5px;">
     Demo: <code style="background:#f1eef1; padding: 2px 6px; border-radius: 4px;">victor@unabase.com</code> / <code style="background:#f1eef1; padding: 2px 6px; border-radius: 4px;">123456</code>
   </div>
 </div></div>
 
 <div class="modal login-modal" id="firstRunModal"><div class="login-card">
-  <h2>🌿 Bienvenido a Energía Vital</h2>
-  <div class="sub">Crea tu primer perfil o restaura un respaldo.</div>
+  <h2>🌿 Crear cuenta</h2>
+  <div class="sub">Tu data se sincroniza entre dispositivos.</div>
   <label style="display:block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px;">Nombre</label>
   <input type="text" id="firstName" placeholder="¿Cómo te llamas?" style="width:100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; font-family: inherit; font-size: 16px;">
-  <label style="display:block; font-size: 12.5px; font-weight: 600; margin: 12px 0 6px;">Email (opcional)</label>
-  <input type="email" id="firstEmail" placeholder="tu@email.com" style="width:100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; font-family: inherit; font-size: 16px;">
+  <label style="display:block; font-size: 12.5px; font-weight: 600; margin: 12px 0 6px;">Email</label>
+  <input type="email" id="firstEmail" placeholder="tu@email.com" autocomplete="email" style="width:100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; font-family: inherit; font-size: 16px;">
+  <label style="display:block; font-size: 12.5px; font-weight: 600; margin: 12px 0 6px;">Contraseña (mínimo 4)</label>
+  <input type="password" id="firstPassword" placeholder="••••••" autocomplete="new-password" style="width:100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; font-family: inherit; font-size: 16px;">
+  <div id="firstError" style="color: #d77b6e; font-size: 12.5px; margin-top: 10px; display: none; padding: 8px 12px; background: rgba(215,123,110,0.08); border-radius: 8px;"></div>
   <div class="login-actions">
-    <button class="add-submit" onclick="firstRunCreate()">Empezar de cero</button>
-    <button class="btn" onclick="document.getElementById('loginImportFile').click()">📦 Importar respaldo (JSON)</button>
-    <input type="file" id="loginImportFile" accept="application/json" style="display:none" onchange="importJSON(event)">
+    <button class="add-submit" onclick="firstRunCreate()">Crear cuenta</button>
+    <button class="btn" onclick="closeModal('firstRunModal'); openModal('authLoginModal');">¿Ya tienes cuenta? Iniciar sesión</button>
   </div>
-  <div class="login-link">¿Tienes el archivo <b>energia-vital-data.json</b>? Click en "Importar respaldo".</div>
 </div></div>
 
 <div class="toast" id="toast"></div>
@@ -692,11 +713,55 @@ function loadState() {
 function saveState() {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(state));
-    writeBackup();
+    writeBackup();           // optional: file backup if folder connected
+    syncStateToServer();     // debounced cloud sync
   } catch (e) {
     console.error('Save state failed:', e);
     toast('Error al guardar. Espacio lleno?');
   }
+}
+
+// ---- Cloud sync (Postgres via /api/state) ----
+let _syncTimer = null;
+let _syncing = false;
+function syncStateToServer() {
+  if (!isAuthenticated) return;
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(doSync, 800);
+  setSyncStatus('pending');
+}
+async function doSync() {
+  if (!isAuthenticated || _syncing) return;
+  _syncing = true; setSyncStatus('syncing');
+  try {
+    const r = await fetch('/api/state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ state })
+    });
+    if (r.status === 401) { setSyncStatus('logged-out'); handleSessionExpired(); return; }
+    if (!r.ok) throw new Error('http ' + r.status);
+    setSyncStatus('ok');
+  } catch (e) {
+    console.warn('sync failed:', e);
+    setSyncStatus('error');
+  } finally {
+    _syncing = false;
+  }
+}
+function setSyncStatus(s) {
+  const el = document.getElementById('syncStatus');
+  if (!el) return;
+  el.dataset.state = s;
+  const txt = { idle: '', pending: 'Cambios sin sincronizar', syncing: 'Sincronizando...', ok: 'Sincronizado', error: 'Sin conexión', 'logged-out': 'Sesión expirada' }[s] || '';
+  el.textContent = txt;
+  el.style.display = txt ? 'inline-flex' : 'none';
+}
+function handleSessionExpired() {
+  isAuthenticated = false;
+  toast('Sesión expirada. Vuelve a iniciar sesión.');
+  setTimeout(() => { window.location.reload(); }, 1500);
 }
 
 // Tiny IndexedDB only for FileSystemDirectoryHandle
@@ -1009,59 +1074,109 @@ function renderUserPill() {
 }
 
 // ====================================================================
-// AUTH
+// AUTH (real, backend-backed via /api/auth/*)
 // ====================================================================
-const AUTH_KEY = 'ev_authenticated';
-const AUTH_EMAIL_KEY = 'ev_authEmail';
-// Hardcoded demo credentials for now.
-// TODO: replace with real backend auth when migrating off localStorage.
-const DEMO_CREDENTIALS = { email: 'victor@unabase.com', password: '123456' };
-
-function checkAuth() { return localStorage.getItem(AUTH_KEY) === 'true'; }
-function getAuthEmail() { return localStorage.getItem(AUTH_EMAIL_KEY) || ''; }
+let isAuthenticated = false;
+let authUser = null; // { id, email, name }
 
 function showAuthError(msg) {
   const el = document.getElementById('authError');
+  if (!el) return;
   el.textContent = msg;
-  el.style.display = 'block';
+  el.style.display = msg ? 'block' : 'none';
+}
+
+async function checkAuthAPI() {
+  try {
+    const r = await fetch('/api/auth/me', { credentials: 'include' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j.user || null;
+  } catch { return null; }
 }
 
 async function tryLogin() {
   const email = (document.getElementById('authEmail').value || '').trim().toLowerCase();
   const pwd = document.getElementById('authPassword').value;
   if (!email || !pwd) { showAuthError('Completa email y contraseña.'); return; }
-  if (email === DEMO_CREDENTIALS.email && pwd === DEMO_CREDENTIALS.password) {
-    localStorage.setItem(AUTH_KEY, 'true');
-    localStorage.setItem(AUTH_EMAIL_KEY, email);
-    document.getElementById('authError').style.display = 'none';
+  showAuthError('');
+  const btn = document.querySelector('#authLoginModal .add-submit');
+  if (btn) { btn.disabled = true; btn.textContent = 'Iniciando...'; }
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email, password: pwd })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { showAuthError(j.error || 'Email o contraseña incorrectos.'); return; }
+    authUser = j.user;
+    isAuthenticated = true;
     document.getElementById('authPassword').value = '';
     closeModal('authLoginModal');
     await bootApp();
-    toast('Sesión iniciada.');
-  } else {
-    showAuthError('Email o contraseña incorrectos.');
+    toast(`Hola ${authUser.name}.`);
+  } catch (e) {
+    showAuthError('Sin conexión con el servidor. Intenta de nuevo.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Iniciar sesión'; }
   }
 }
 
-function logout() {
+async function logout() {
   closeUserMenu();
-  if (!confirm('¿Cerrar sesión? Tu data en este dispositivo se mantiene.')) return;
-  localStorage.removeItem(AUTH_KEY);
-  localStorage.removeItem(AUTH_EMAIL_KEY);
+  if (!confirm('¿Cerrar sesión?')) return;
+  try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch {}
+  // Clear sensitive local state too
+  localStorage.removeItem(LS_KEY);
+  isAuthenticated = false;
+  authUser = null;
   window.location.reload();
 }
 
 // ====================================================================
-// FIRST RUN
+// FIRST RUN — registers a new account via /api/auth/register
 // ====================================================================
-function firstRunCreate() {
+function showFirstError(msg) {
+  const el = document.getElementById('firstError');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.display = msg ? 'block' : 'none';
+}
+
+async function firstRunCreate() {
   const name = document.getElementById('firstName').value.trim() || 'Yo';
-  const email = document.getElementById('firstEmail').value.trim();
-  const u = createUser(name, email);
-  setActiveUser(u.id);
-  closeModal('firstRunModal');
-  renderUserPill(); render(); renderAvances();
-  toast(`¡Bienvenido, ${u.name}!`);
+  const email = document.getElementById('firstEmail').value.trim().toLowerCase();
+  const pwd = document.getElementById('firstPassword').value;
+  showFirstError('');
+  if (!email) { showFirstError('Email requerido.'); return; }
+  if (!pwd || pwd.length < 4) { showFirstError('Contraseña muy corta (mínimo 4).'); return; }
+  const btn = document.querySelector('#firstRunModal .add-submit');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creando...'; }
+  try {
+    const r = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email, password: pwd, name })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { showFirstError(j.error || 'Error al registrar.'); return; }
+    authUser = j.user;
+    isAuthenticated = true;
+    document.getElementById('firstPassword').value = '';
+    closeModal('firstRunModal');
+    state = createEmptyState();
+    const u = createUser(name, email);
+    setActiveUser(u.id);
+    renderUserPill(); render(); renderAvances();
+    toast(`¡Bienvenido, ${u.name}!`);
+  } catch (e) {
+    showFirstError('Sin conexión con el servidor.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Crear cuenta'; }
+  }
 }
 
 // ====================================================================
@@ -1370,11 +1485,16 @@ function renderAvances() {
 // ====================================================================
 async function init() {
   try {
-    if (!checkAuth()) {
+    // Verify session via API (cookie HttpOnly, server is source of truth)
+    const me = await checkAuthAPI();
+    if (!me) {
+      isAuthenticated = false;
       openModal('authLoginModal');
       setTimeout(() => document.getElementById('authEmail').focus(), 100);
       return;
     }
+    isAuthenticated = true;
+    authUser = me;
     await bootApp();
   } catch (e) {
     console.error('Init error:', e);
@@ -1383,29 +1503,49 @@ async function init() {
 }
 
 async function bootApp() {
-  const loaded = loadState();
+  // Load local cache first (for offline/fast initial paint)
+  const loadedLocal = loadState();
   dirHandle = await getHandle();
   updateBackupStatus();
 
-  // Auto-create user from auth email if state is empty
-  if (!loaded || state.users.length === 0) {
-    const email = getAuthEmail();
-    if (email) {
-      // Use email's local part as name (capitalized)
-      const namePart = email.split('@')[0];
-      const cap = namePart.charAt(0).toUpperCase() + namePart.slice(1);
-      const u = createUser(cap, email);
+  // Pull canonical state from server. Server wins if it has data.
+  let serverState = null;
+  try {
+    const r = await fetch('/api/state', { credentials: 'include' });
+    if (r.ok) {
+      const j = await r.json();
+      serverState = j.state;
+    }
+  } catch (e) { console.warn('Cloud fetch failed, using local cache.'); }
+
+  if (serverState && serverState.users && serverState.users.length > 0) {
+    // Replace local with server (server is source of truth)
+    state = serverState;
+    if (!state.users) state.users = [];
+    if (!state.days) state.days = [];
+    if (!state.goals) state.goals = [];
+    if (!state.settings) state.settings = {};
+    if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
+      state.activeUserId = state.users[0].id;
+    }
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
+    setSyncStatus('ok');
+  } else {
+    // No state on server. Use local cache OR auto-create profile from auth user.
+    if (!loadedLocal || state.users.length === 0) {
+      const namePart = (authUser.email || '').split('@')[0];
+      const cap = (authUser.name || namePart || 'Yo').charAt(0).toUpperCase() + (authUser.name || namePart || 'Yo').slice(1);
+      const u = createUser(cap, authUser.email);
       setActiveUser(u.id);
     } else {
-      openModal('firstRunModal');
-      setTimeout(() => document.getElementById('firstName').focus(), 100);
-      return;
+      if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
+        state.activeUserId = state.users[0].id;
+      }
+      // Push local cache to server
+      doSync();
     }
   }
-  if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
-    state.activeUserId = state.users[0].id;
-    saveState();
-  }
+
   renderUserPill();
   render();
   renderAvances();

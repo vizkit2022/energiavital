@@ -1,11 +1,14 @@
 {
   "name": "energia-vital",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Tu pirámide de Estar Bien — control diario de Energía Vital, Relaciones y Yo",
+  "description": "Tu pirámide de Estar Bien — control diario con auth y sync vía Postgres",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
   },
   "engines": {
     "node": ">=18"
