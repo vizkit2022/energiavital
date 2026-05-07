@@ -91,6 +91,26 @@ body { padding: 0 0 calc(48px + env(safe-area-inset-bottom)); }
 .header { text-align: center; margin-bottom: 22px; }
 .header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; display: inline-flex; align-items: center; gap: 10px; }
 .header .date, .avances-header .date { color: var(--muted); font-size: 13px; margin-top: 4px; text-transform: capitalize; }
+.date-nav { display: inline-flex; align-items: center; gap: 8px; margin-top: 6px; }
+.date-arrow {
+  background: transparent; border: 1px solid var(--line);
+  border-radius: 8px; width: 28px; height: 28px;
+  cursor: pointer; font-family: inherit; color: var(--slate);
+  font-size: 16px; line-height: 1; padding: 0;
+  display: grid; place-items: center;
+  transition: all .15s;
+}
+.date-arrow:hover:not(:disabled) { background: #f1eef1; border-color: var(--slate); color: var(--text); }
+.date-arrow:disabled { opacity: 0.3; cursor: not-allowed; }
+.back-today {
+  display: inline-block; margin-top: 8px;
+  padding: 5px 12px;
+  background: var(--mauve); color: white;
+  border: none; border-radius: 99px;
+  font-size: 11.5px; font-weight: 600; font-family: inherit;
+  cursor: pointer;
+}
+.back-today:hover { background: #b07d8b; }
 .score-pill { display: inline-flex; align-items: center; gap: 12px; margin-top: 14px; padding: 10px 18px 10px 14px; background: var(--card); border-radius: 99px; box-shadow: var(--shadow); }
 .score-ring { width: 38px; height: 38px; border-radius: 50%; background: conic-gradient(var(--cyan) 0%, #ece8ec 0); display: grid; place-items: center; position: relative; }
 .score-ring::after { content: ""; position: absolute; inset: 4px; background: var(--card); border-radius: 50%; }
@@ -153,6 +173,7 @@ body { padding: 0 0 calc(48px + env(safe-area-inset-bottom)); }
 .history-bars { display: flex; align-items: flex-end; height: 110px; gap: 5px; padding-bottom: 4px; border-bottom: 1px solid #efebef; }
 .history-bar { flex: 1; background: linear-gradient(to top, var(--peach), var(--cyan) 60%, var(--mint)); border-radius: 5px 5px 0 0; min-height: 3px; position: relative; cursor: pointer; }
 .history-bar.today { outline: 2px solid var(--slate); outline-offset: 1px; }
+.history-bar.viewing { outline: 2px solid var(--mauve); outline-offset: 1px; }
 .history-bar.empty { background: #ece8ec; }
 .history-bar:hover { filter: brightness(.95); }
 .history-bar:hover::after, .history-bar:active::after { content: attr(data-label); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--slate); color: white; padding: 5px 9px; border-radius: 6px; font-size: 11px; white-space: nowrap; margin-bottom: 5px; pointer-events: none; }
@@ -353,7 +374,12 @@ footer a:hover { color: var(--text); }
 <div class="view active" id="view-energia">
   <header class="header">
     <h1><span>🌿</span> Energía</h1>
-    <div class="date" id="dateDisplay"></div>
+    <div class="date-nav">
+      <button class="date-arrow" id="dayPrev" onclick="changeViewDate(-1)" title="Día anterior">‹</button>
+      <span class="date" id="dateDisplay"></span>
+      <button class="date-arrow" id="dayNext" onclick="changeViewDate(1)" title="Día siguiente">›</button>
+    </div>
+    <button class="back-today" id="backToday" onclick="goToToday()" style="display:none">↩ Volver a hoy</button>
     <div class="score-pill">
       <div class="score-ring"><span id="scoreRingPct">0</span></div>
       <div class="label">Hoy estás al <b id="globalPct">0%</b> de tu mejor versión</div>
@@ -710,9 +736,16 @@ function loadState() {
     return true;
   } catch (e) { console.warn('Load state failed:', e); return false; }
 }
+const DIRTY_KEY = LS_KEY + '_dirty';
+function markDirty() { localStorage.setItem(DIRTY_KEY, '1'); }
+function clearDirty() { localStorage.setItem(DIRTY_KEY, '0'); }
+function isDirty() { return localStorage.getItem(DIRTY_KEY) === '1'; }
+
 function saveState() {
   try {
+    state._lastModified = Date.now();
     localStorage.setItem(LS_KEY, JSON.stringify(state));
+    markDirty();
     writeBackup();           // optional: file backup if folder connected
     syncStateToServer();     // debounced cloud sync
   } catch (e) {
@@ -727,7 +760,7 @@ let _syncing = false;
 function syncStateToServer() {
   if (!isAuthenticated) return;
   clearTimeout(_syncTimer);
-  _syncTimer = setTimeout(doSync, 800);
+  _syncTimer = setTimeout(doSync, 250);
   setSyncStatus('pending');
 }
 async function doSync() {
@@ -742,6 +775,7 @@ async function doSync() {
     });
     if (r.status === 401) { setSyncStatus('logged-out'); handleSessionExpired(); return; }
     if (!r.ok) throw new Error('http ' + r.status);
+    clearDirty();
     setSyncStatus('ok');
   } catch (e) {
     console.warn('sync failed:', e);
@@ -750,6 +784,20 @@ async function doSync() {
     _syncing = false;
   }
 }
+
+// Last-resort flush of pending changes when user closes/reloads the tab
+window.addEventListener('beforeunload', () => {
+  if (!isAuthenticated || !isDirty()) return;
+  try {
+    fetch('/api/state', {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state }),
+      keepalive: true
+    });
+  } catch {}
+});
 function setSyncStatus(s) {
   const el = document.getElementById('syncStatus');
   if (!el) return;
@@ -798,8 +846,22 @@ async function setHandle(h) {
 // HELPERS
 // ====================================================================
 function uid(p = '') { return (p ? p + '_' : '') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
-function todayKey() { return new Date().toISOString().slice(0, 10); }
+// Local-timezone date key (YYYY-MM-DD) — NOT UTC.
+// Avoids confusion when local time is past 21:00 in negative-UTC zones.
+function todayKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function dateKeyOf(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function dateFromKey(k) { // returns Date at local midnight for the given YYYY-MM-DD
+  const [y, m, d] = k.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
 function now() { return new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }); }
+let viewDate = todayKey(); // currently-displayed day; can travel into past
+let _lastDayCheck = todayKey();
 function escapeHtml(s) { return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])); }
 function initialsFromName(name) {
   const parts = (name || '').trim().split(/\s+/);
@@ -827,7 +889,7 @@ function setActiveUser(id) { state.activeUserId = id; saveState(); }
 function emptyDay(userId, date) {
   return { userId, date, meals: [], sleepHours: 0, exercise: { components: [], pct: 0, label: 'Sin movimiento' }, relations: { circulo: 0, otro: 0, entries: [] }, yo: [] };
 }
-function getDay(date = todayKey()) {
+function getDay(date = viewDate) {
   let d = state.days.find(x => x.userId === state.activeUserId && x.date === date);
   if (!d) {
     d = emptyDay(state.activeUserId, date);
@@ -1323,6 +1385,37 @@ function switchView(view) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+// Day navigation
+function changeViewDate(delta) {
+  const d = dateFromKey(viewDate);
+  d.setDate(d.getDate() + delta);
+  const nextKey = dateKeyOf(d);
+  if (nextKey > todayKey()) return; // no future
+  viewDate = nextKey;
+  render();
+}
+function goToToday() {
+  viewDate = todayKey();
+  render();
+}
+function jumpToDate(k) {
+  if (!k || k > todayKey()) return;
+  viewDate = k;
+  render();
+  switchView('energia');
+}
+
+// Detect midnight rollover & re-render
+setInterval(() => {
+  const t = todayKey();
+  if (t !== _lastDayCheck) {
+    const wasOnYesterday = viewDate === _lastDayCheck;
+    _lastDayCheck = t;
+    if (wasOnYesterday) viewDate = t;
+    if (currentView === 'energia') render(); else renderAvances();
+  }
+}, 30 * 1000);
+
 // ====================================================================
 // CALCS
 // ====================================================================
@@ -1338,8 +1431,16 @@ function calcGlobal(d) { return Math.round((calcEnergia(d) + calcRelaciones(d) +
 // RENDER
 // ====================================================================
 function render() {
-  document.getElementById('dateDisplay').textContent = new Date().toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  const day = getDay();
+  const viewDateObj = dateFromKey(viewDate);
+  document.getElementById('dateDisplay').textContent =
+    viewDateObj.toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+  // Day-nav buttons
+  const isToday = viewDate === todayKey();
+  document.getElementById('dayNext').disabled = isToday;
+  document.getElementById('backToday').style.display = isToday ? 'none' : 'inline-block';
+
+  const day = getDay(viewDate);
   const ali = calcAlimentacion(day), dor = calcDormir(day), eje = calcEjercicio(day), rel = calcRelaciones(day), yo = calcYo(day), global = calcGlobal(day);
   document.getElementById('globalPct').textContent = global + '%';
   document.getElementById('scoreRingPct').textContent = global;
@@ -1403,11 +1504,14 @@ function renderHistory() {
     days.push({ d, k, pct: dd ? calcGlobal(dd) : null });
   }
   document.getElementById('historyBars').innerHTML = days.map(x => {
-    const t = x.k === todayKey(); const has = x.pct !== null;
+    const t = x.k === todayKey();
+    const v = x.k === viewDate;
+    const has = x.pct !== null;
     const h = has ? Math.max(3, x.pct) : 3;
     const ld = x.d.toLocaleDateString('es', { day: 'numeric', month: 'short' });
     const lbl = has ? `${ld}: ${x.pct}%` : `${ld}: sin datos`;
-    return `<div class="history-bar${t ? ' today' : ''}${has ? '' : ' empty'}" style="height: ${h}%" data-label="${lbl}"></div>`;
+    const cls = `history-bar${t ? ' today' : ''}${v && !t ? ' viewing' : ''}${has ? '' : ' empty'}`;
+    return `<div class="${cls}" style="height: ${h}%" data-label="${lbl}" onclick="jumpToDate('${x.k}')"></div>`;
   }).join('');
   document.getElementById('historyLabels').innerHTML = days.map(x => `<span>${x.d.getDate()}</span>`).join('');
 }
@@ -1508,18 +1612,35 @@ async function bootApp() {
   dirHandle = await getHandle();
   updateBackupStatus();
 
-  // Pull canonical state from server. Server wins if it has data.
+  // Pull canonical state from server.
   let serverState = null;
+  let serverUpdatedAt = null;
   try {
     const r = await fetch('/api/state', { credentials: 'include' });
     if (r.ok) {
       const j = await r.json();
       serverState = j.state;
+      serverUpdatedAt = j.updated_at ? new Date(j.updated_at).getTime() : null;
     }
   } catch (e) { console.warn('Cloud fetch failed, using local cache.'); }
 
-  if (serverState && serverState.users && serverState.users.length > 0) {
-    // Replace local with server (server is source of truth)
+  const localLastMod = state._lastModified || 0;
+  const dirty = isDirty();
+  const serverHasData = !!(serverState && serverState.users && serverState.users.length > 0);
+  const localHasData = !!(loadedLocal && state.users && state.users.length > 0);
+
+  // Decide which side wins
+  // 1. If we have unsynced local changes (dirty) AND local is newer than server → push local, keep local
+  // 2. Else if server has data → use server (server is source of truth)
+  // 3. Else if local has data → use local, push to server
+  // 4. Else → fresh user, auto-create profile from auth email
+  if (dirty && localHasData && (!serverUpdatedAt || localLastMod > serverUpdatedAt)) {
+    // Local is newer; push it up
+    if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
+      state.activeUserId = state.users[0].id;
+    }
+    doSync();
+  } else if (serverHasData) {
     state = serverState;
     if (!state.users) state.users = [];
     if (!state.days) state.days = [];
@@ -1529,22 +1650,23 @@ async function bootApp() {
       state.activeUserId = state.users[0].id;
     }
     localStorage.setItem(LS_KEY, JSON.stringify(state));
+    clearDirty();
     setSyncStatus('ok');
-  } else {
-    // No state on server. Use local cache OR auto-create profile from auth user.
-    if (!loadedLocal || state.users.length === 0) {
-      const namePart = (authUser.email || '').split('@')[0];
-      const cap = (authUser.name || namePart || 'Yo').charAt(0).toUpperCase() + (authUser.name || namePart || 'Yo').slice(1);
-      const u = createUser(cap, authUser.email);
-      setActiveUser(u.id);
-    } else {
-      if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
-        state.activeUserId = state.users[0].id;
-      }
-      // Push local cache to server
-      doSync();
+  } else if (localHasData) {
+    if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
+      state.activeUserId = state.users[0].id;
     }
+    doSync(); // push local to server
+  } else {
+    const namePart = (authUser.email || '').split('@')[0];
+    const cap = (authUser.name || namePart || 'Yo').charAt(0).toUpperCase() + (authUser.name || namePart || 'Yo').slice(1);
+    const u = createUser(cap, authUser.email);
+    setActiveUser(u.id);
   }
+
+  // Reset viewDate to today on boot (in case user reopens after midnight)
+  viewDate = todayKey();
+  _lastDayCheck = viewDate;
 
   renderUserPill();
   render();
