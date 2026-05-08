@@ -298,6 +298,62 @@ footer a:hover { color: var(--text); }
 .profile-item .info .name { font-weight: 700; font-size: 14px; }
 .profile-item .info .email { font-size: 12px; color: var(--muted); }
 
+/* Mic FAB */
+.mic-fab {
+  position: fixed;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  right: 20px;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--mauve), var(--peach));
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(196,146,161,0.45), 0 2px 6px rgba(0,0,0,0.08);
+  z-index: 90;
+  transition: transform .15s, box-shadow .15s;
+  font-family: inherit;
+  display: grid; place-items: center;
+}
+.mic-fab:hover { transform: scale(1.05); box-shadow: 0 10px 28px rgba(196,146,161,0.55), 0 3px 8px rgba(0,0,0,0.1); }
+.mic-fab:active { transform: scale(0.95); }
+.mic-fab.recording {
+  background: linear-gradient(135deg, #d77b6e, #ff8a7a);
+  animation: micPulse 1.4s infinite;
+}
+@keyframes micPulse {
+  0%,100% { box-shadow: 0 8px 22px rgba(215,123,110,0.45), 0 0 0 0 rgba(215,123,110,0.5); }
+  50%     { box-shadow: 0 8px 22px rgba(215,123,110,0.45), 0 0 0 14px rgba(215,123,110,0); }
+}
+
+.voice-transcript {
+  margin-top: 12px; padding: 12px 14px;
+  background: #f8f5f7; border-radius: 12px;
+  min-height: 70px; max-height: 200px; overflow-y: auto;
+  font-size: 14px; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+}
+.voice-transcript:empty::before { content: attr(data-empty); color: var(--muted); font-style: italic; }
+.voice-transcript .interim { color: var(--muted); }
+
+.voice-item-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px;
+  background: #fafafa;
+  border-radius: 10px;
+  margin-bottom: 6px;
+  border-left: 4px solid var(--accent, var(--line));
+  cursor: pointer;
+}
+.voice-item-row:hover { background: #f3f0f3; }
+.voice-item-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; }
+.voice-item-row .vi-text { flex: 1; font-size: 13px; word-break: break-word; }
+.voice-item-row.kind-meal     { --accent: var(--peach); }
+.voice-item-row.kind-sleep    { --accent: var(--mauve); }
+.voice-item-row.kind-exercise { --accent: var(--steel); }
+.voice-item-row.kind-relation { --accent: var(--cyan); }
+.voice-item-row.kind-yo       { --accent: var(--mint); }
+.voice-item-row.kind-goal     { --accent: var(--slate); }
+
 .toast { position: fixed; bottom: calc(22px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%) translateY(20px); background: var(--slate); color: white; padding: 10px 18px; border-radius: 99px; font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,.18); opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; z-index: 200; max-width: 90vw; text-align: center; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
@@ -706,6 +762,33 @@ footer a:hover { color: var(--text); }
   <div class="login-actions">
     <button class="add-submit" onclick="firstRunCreate()">Crear cuenta</button>
     <button class="btn" onclick="closeModal('firstRunModal'); openModal('authLoginModal');">¿Ya tienes cuenta? Iniciar sesión</button>
+  </div>
+</div></div>
+
+<!-- Mic FAB (floating action button) -->
+<button class="mic-fab" id="micFab" onclick="openVoiceModal()" title="Nota de voz" aria-label="Nota de voz">
+  <span style="font-size: 22px; line-height: 1;">🎤</span>
+</button>
+
+<!-- Voice modal -->
+<div class="modal" id="voiceModal"><div class="modal-content" style="max-width: 520px;">
+  <h3>🎤 Nota de voz</h3>
+  <p class="hint">Cuéntame qué hiciste — comidas, sueño, ejercicio, momentos, objetivos. La IA distribuye cada cosa donde corresponde.</p>
+
+  <div id="voiceState" style="margin-top: 12px;">
+    <button class="add-submit" id="voiceStart" onclick="startVoiceRecording()" style="width:100%;">▶️ Empezar a grabar</button>
+  </div>
+
+  <div id="voiceTranscript" class="voice-transcript"></div>
+
+  <div id="voiceExtracted" style="display: none; margin-top: 14px;">
+    <div style="font-size: 13px; font-weight: 700; color: var(--slate); margin-bottom: 8px;">Esto voy a agregar:</div>
+    <div id="voiceItems"></div>
+    <button class="add-submit" id="voiceApplyBtn" onclick="applyVoiceExtraction()" style="margin-top: 12px; width: 100%;">Agregar todo</button>
+  </div>
+
+  <div class="modal-actions">
+    <button class="btn" onclick="closeVoiceModal()">Cerrar</button>
   </div>
 </div></div>
 
@@ -1744,6 +1827,205 @@ async function bootApp() {
   render();
   renderAvances();
   refreshCircleSuggestions();
+}
+
+// ====================================================================
+// VOICE NOTE → AI parsing → distribute into state
+// ====================================================================
+let voiceRecognition = null;
+let voiceTranscript = '';
+let voiceInterim = '';
+let _voiceItems = [];
+
+function speechAvailable() {
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function openVoiceModal() {
+  if (!isAuthenticated) { toast('Inicia sesión para usar nota de voz.'); return; }
+  voiceTranscript = '';
+  voiceInterim = '';
+  _voiceItems = [];
+  const tEl = document.getElementById('voiceTranscript');
+  tEl.innerHTML = '';
+  tEl.setAttribute('data-empty', speechAvailable() ? 'Toca "Empezar a grabar" y cuenta tu día...' : 'Tu navegador no soporta dictado por voz. Usa Chrome o Safari.');
+  document.getElementById('voiceExtracted').style.display = 'none';
+  document.getElementById('voiceItems').innerHTML = '';
+  document.getElementById('voiceState').innerHTML = speechAvailable()
+    ? '<button class="add-submit" onclick="startVoiceRecording()" style="width:100%;">▶️ Empezar a grabar</button>'
+    : '<div style="color: var(--muted); text-align: center; font-size: 13px; padding: 8px;">Dictado por voz no disponible en este navegador.</div>';
+  openModal('voiceModal');
+}
+
+function closeVoiceModal() {
+  cancelVoiceRecording();
+  closeModal('voiceModal');
+}
+
+function startVoiceRecording() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { toast('Tu navegador no soporta dictado.'); return; }
+
+  voiceRecognition = new SR();
+  voiceRecognition.lang = 'es-CL';
+  voiceRecognition.continuous = true;
+  voiceRecognition.interimResults = true;
+
+  voiceRecognition.onresult = (event) => {
+    let interim = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const r = event.results[i];
+      if (r.isFinal) voiceTranscript += r[0].transcript;
+      else interim += r[0].transcript;
+    }
+    voiceInterim = interim;
+    const tEl = document.getElementById('voiceTranscript');
+    tEl.innerHTML = escapeHtml(voiceTranscript) + (interim ? '<span class="interim"> ' + escapeHtml(interim) + '</span>' : '');
+  };
+  voiceRecognition.onerror = (e) => {
+    console.warn('voice error:', e.error);
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      toast('Permite el micrófono para grabar.');
+    } else if (e.error === 'no-speech') {
+      // ignore — usuario solo hizo silencio
+    } else {
+      toast('Error de micrófono: ' + e.error);
+    }
+  };
+  voiceRecognition.onend = () => {
+    // Browser may auto-end after silence; if user wants to keep going, they can click again.
+    document.getElementById('micFab').classList.remove('recording');
+  };
+
+  try {
+    voiceRecognition.start();
+    document.getElementById('micFab').classList.add('recording');
+    document.getElementById('voiceState').innerHTML =
+      '<button class="add-submit" onclick="stopVoiceRecording()" style="width:100%; background:#d77b6e;">⏹ Detener y procesar con IA</button>';
+  } catch (e) {
+    console.error('start failed:', e);
+    toast('No se pudo iniciar la grabación.');
+  }
+}
+
+async function stopVoiceRecording() {
+  if (voiceRecognition) {
+    try { voiceRecognition.stop(); } catch {}
+    voiceRecognition = null;
+  }
+  document.getElementById('micFab').classList.remove('recording');
+
+  const finalText = (voiceTranscript + ' ' + (voiceInterim || '')).trim();
+  if (!finalText) { toast('No grabaste nada.'); openVoiceModal(); return; }
+
+  document.getElementById('voiceState').innerHTML =
+    '<div style="text-align:center; padding: 16px; color: var(--slate); font-size: 13.5px;">⌛ Analizando con IA...</div>';
+
+  try {
+    const r = await fetch('/api/voice', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: finalText })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) { handleSessionExpired(); return; }
+    if (r.status === 503) { toast('IA no configurada. Contacta al admin.'); }
+    if (!r.ok) throw new Error(j.error || 'http ' + r.status);
+    showExtractedItems(j.extracted || {});
+  } catch (e) {
+    console.error('voice api error:', e);
+    document.getElementById('voiceState').innerHTML =
+      `<div style="color: #d77b6e; font-size: 13px; padding: 10px; background: rgba(215,123,110,0.08); border-radius: 8px; margin-bottom: 8px;">Error: ${escapeHtml(e.message || 'desconocido')}</div>
+       <button class="add-submit" onclick="startVoiceRecording()" style="width:100%;">▶️ Volver a grabar</button>`;
+  }
+}
+
+function cancelVoiceRecording() {
+  if (voiceRecognition) {
+    try { voiceRecognition.abort(); } catch {}
+    voiceRecognition = null;
+  }
+  const fab = document.getElementById('micFab');
+  if (fab) fab.classList.remove('recording');
+}
+
+const VOICE_QUALITY_LABEL = { saludable: 'Saludable', regular: 'Regular', procesada: 'Procesada', snack: 'Snack', basura: 'Basura/alcohol' };
+const VOICE_EXERCISE_LABEL = { bajo: 'Mov. bajo (+30%)', alto: 'Mov. alto (+60%)', gym: 'Gimnasio (100%)', otro: 'Deporte (100%)' };
+const VOICE_IMP_LABEL_SHORT = { vital: '⚡ Vital', importante: '◆ Importante', noimp: '○ No imp.' };
+
+function showExtractedItems(extracted) {
+  document.getElementById('voiceState').innerHTML = '';
+  const items = [];
+  for (const m of (extracted.meals || [])) items.push({ kind: 'meal', data: m, label: `🍽️ Comida — ${m.desc} (${VOICE_QUALITY_LABEL[m.quality]})` });
+  if (typeof extracted.sleepHours === 'number') items.push({ kind: 'sleep', data: { hours: extracted.sleepHours }, label: `🌙 Sueño — ${extracted.sleepHours} hrs` });
+  for (const e of (extracted.exercise || [])) items.push({ kind: 'exercise', data: e, label: `🏃 Ejercicio — ${VOICE_EXERCISE_LABEL[e.type]}${e.label ? ' · ' + e.label : ''}` });
+  for (const r of (extracted.relations || [])) items.push({ kind: 'relation', data: r, label: `💞 ${r.type === 'circulo' ? 'Círculo' : 'Otro'} — ${r.who}: ${r.what}` });
+  for (const y of (extracted.yo || [])) items.push({ kind: 'yo', data: y, label: `✨ Yo — ${y.what} (${y.minutes} min)` });
+  for (const g of (extracted.goals || [])) items.push({ kind: 'goal', data: g, label: `📋 Objetivo (${CAT_LABEL[g.category]}, ${VOICE_IMP_LABEL_SHORT[g.importance]}) — ${g.text}` });
+
+  _voiceItems = items;
+  const itemsEl = document.getElementById('voiceItems');
+  if (items.length === 0) {
+    itemsEl.innerHTML = '<p style="color:var(--muted); font-style: italic; font-size: 13px; padding: 10px;">No detecté items concretos. Intenta nombrar comidas, horas dormidas, ejercicio, momentos compartidos u objetivos.</p>';
+    document.getElementById('voiceApplyBtn').style.display = 'none';
+  } else {
+    itemsEl.innerHTML = items.map((it, i) =>
+      `<label class="voice-item-row kind-${it.kind}">
+         <input type="checkbox" id="vi_${i}" data-idx="${i}" checked>
+         <span class="vi-text">${escapeHtml(it.label)}</span>
+       </label>`
+    ).join('');
+    document.getElementById('voiceApplyBtn').style.display = 'block';
+  }
+  document.getElementById('voiceExtracted').style.display = 'block';
+}
+
+function applyVoiceExtraction() {
+  let added = 0;
+  const day = getDay();
+  for (let i = 0; i < _voiceItems.length; i++) {
+    const cb = document.getElementById('vi_' + i);
+    if (!cb || !cb.checked) continue;
+    const it = _voiceItems[i];
+    if (it.kind === 'meal') {
+      day.meals.push({ id: uid(), quality: it.data.quality, desc: it.data.desc || VOICE_QUALITY_LABEL[it.data.quality], time: now() });
+    } else if (it.kind === 'sleep') {
+      day.sleepHours = it.data.hours;
+    } else if (it.kind === 'exercise') {
+      const def = EXERCISE[it.data.type];
+      if (def) {
+        if (it.data.type === 'gym' || it.data.type === 'otro') { day.exercise.pct = 100; day.exercise.label = def.label; }
+        else { day.exercise.pct = Math.min(100, day.exercise.pct + def.add); day.exercise.label = day.exercise.pct >= 100 ? 'Movimiento completo' : def.label; }
+        day.exercise.components.push({ id: uid(), type: it.data.type, time: now(), label: def.label });
+      }
+    } else if (it.kind === 'relation') {
+      if (it.data.type === 'circulo') day.relations.circulo = Math.min(60, day.relations.circulo + 30);
+      else day.relations.otro = Math.min(40, day.relations.otro + 20);
+      day.relations.entries.push({ id: uid(), type: it.data.type, label: `${it.data.who}: ${it.data.what}`, time: now() });
+    } else if (it.kind === 'yo') {
+      day.yo.push({ id: uid(), what: it.data.what, minutes: it.data.minutes || 30, time: now() });
+    } else if (it.kind === 'goal') {
+      state.goals.push({
+        id: uid('g'),
+        userId: state.activeUserId,
+        text: it.data.text,
+        category: it.data.category,
+        importance: it.data.importance,
+        completed: true,
+        createdAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        date: viewDate
+      });
+    }
+    added++;
+  }
+  saveState();
+  closeModal('voiceModal');
+  voiceTranscript = ''; voiceInterim = ''; _voiceItems = [];
+  render();
+  renderAvances();
+  toast(added === 1 ? '1 item agregado.' : `${added} items agregados.`);
 }
 
 // Register service worker (only works on https or localhost; ignored on file://)

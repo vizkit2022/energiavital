@@ -115,6 +115,134 @@ async function deleteSession(token) {
 }
 
 // --------------------------------------------------------------------
+// AI: parse voice note into structured items via Claude Haiku
+// --------------------------------------------------------------------
+const VOICE_SYSTEM_PROMPT = `Eres un parser para ViveApp, una app de seguimiento personal. El usuario te contará en español qué hizo en su día con una nota de voz transcrita. Tu trabajo es extraer items concretos y devolver SOLO un objeto JSON (sin texto adicional, sin markdown, sin explicación).
+
+Estructura del JSON (omite las keys que NO se mencionen):
+{
+  "meals": [{"desc": "descripción de la comida", "quality": "saludable|regular|procesada|snack|basura"}],
+  "sleepHours": número entre 0 y 24,
+  "exercise": [{"type": "bajo|alto|gym|otro", "label": "qué hizo"}],
+  "relations": [{"type": "circulo|otro", "who": "nombre", "what": "qué hicieron juntos"}],
+  "yo": [{"what": "actividad para sí mismo", "minutes": número estimado de minutos}],
+  "goals": [{"text": "objetivo cumplido", "category": "trabajo|personal|familia|vida", "importance": "vital|importante|noimp"}]
+}
+
+Reglas de calidad de comida:
+- "saludable" = balanceada, frutas/verduras, proteína sin frituras
+- "regular" = comida normal sin destacar
+- "procesada" = fast food, comida envasada
+- "snack" = solo café, té, picadita
+- "basura" = comida muy procesada, alcohol excesivo, dulces
+
+Reglas de ejercicio:
+- "bajo" = caminar, paseo, movimiento ligero
+- "alto" = correr, intensidad cardiovascular alta
+- "gym" = sesión completa de gimnasio
+- "otro" = deporte estructurado (fútbol, tenis, etc.)
+
+Reglas de relaciones:
+- "circulo" = familia íntima (esposa, hijos, padres, hermanos)
+- "otro" = amigos, vecinos, colegas, conocidos
+
+Reglas de objetivos (goals):
+- Solo cosas que el usuario CUMPLIÓ/TERMINÓ ("cerré la propuesta", "entregué el informe")
+- categorías: trabajo, personal (cosas para sí mismo), familia, vida (recados, salud, casa)
+- importancia: vital (crítico), importante (significativo), noimp (menor)
+
+IMPORTANTE: Devuelve SOLO el JSON, nada más. No agregues explicaciones, comentarios, ni código markdown. Empieza con { y termina con }.`;
+
+async function parseVoiceNote(text) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1500,
+      system: VOICE_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: text }]
+    })
+  });
+
+  if (!r.ok) {
+    const errText = await r.text().catch(() => '');
+    throw new Error(`anthropic ${r.status}: ${errText.slice(0, 200)}`);
+  }
+  const j = await r.json();
+  const content = j.content && j.content[0] && j.content[0].text;
+  if (!content) throw new Error('respuesta vacía de la IA');
+
+  // Extract first balanced JSON object from the response
+  const m = content.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('no JSON en respuesta IA');
+  let parsed;
+  try { parsed = JSON.parse(m[0]); }
+  catch (e) { throw new Error('JSON inválido: ' + e.message); }
+
+  // Sanitize: only known keys, only allowed values
+  const out = {};
+  const allowedQuality = new Set(['saludable', 'regular', 'procesada', 'snack', 'basura']);
+  const allowedExType = new Set(['bajo', 'alto', 'gym', 'otro']);
+  const allowedRelType = new Set(['circulo', 'otro']);
+  const allowedCat = new Set(['trabajo', 'personal', 'familia', 'vida']);
+  const allowedImp = new Set(['vital', 'importante', 'noimp']);
+
+  if (Array.isArray(parsed.meals)) {
+    out.meals = parsed.meals
+      .filter(m => m && typeof m === 'object' && allowedQuality.has(m.quality))
+      .map(m => ({ desc: String(m.desc || '').slice(0, 200), quality: m.quality }))
+      .slice(0, 10);
+  }
+  if (typeof parsed.sleepHours === 'number' && parsed.sleepHours >= 0 && parsed.sleepHours <= 24) {
+    out.sleepHours = Math.round(parsed.sleepHours * 2) / 2; // half-hour precision
+  }
+  if (Array.isArray(parsed.exercise)) {
+    out.exercise = parsed.exercise
+      .filter(e => e && typeof e === 'object' && allowedExType.has(e.type))
+      .map(e => ({ type: e.type, label: String(e.label || '').slice(0, 100) }))
+      .slice(0, 5);
+  }
+  if (Array.isArray(parsed.relations)) {
+    out.relations = parsed.relations
+      .filter(r => r && typeof r === 'object' && allowedRelType.has(r.type))
+      .map(r => ({
+        type: r.type,
+        who: String(r.who || '—').slice(0, 100),
+        what: String(r.what || 'momento compartido').slice(0, 200)
+      }))
+      .slice(0, 10);
+  }
+  if (Array.isArray(parsed.yo)) {
+    out.yo = parsed.yo
+      .filter(y => y && typeof y === 'object' && y.what)
+      .map(y => ({
+        what: String(y.what).slice(0, 200),
+        minutes: typeof y.minutes === 'number' ? Math.max(5, Math.min(600, Math.round(y.minutes))) : 30
+      }))
+      .slice(0, 5);
+  }
+  if (Array.isArray(parsed.goals)) {
+    out.goals = parsed.goals
+      .filter(g => g && typeof g === 'object' && g.text && allowedCat.has(g.category) && allowedImp.has(g.importance))
+      .map(g => ({
+        text: String(g.text).slice(0, 300),
+        category: g.category,
+        importance: g.importance
+      }))
+      .slice(0, 10);
+  }
+  return out;
+}
+
+// --------------------------------------------------------------------
 // HTTP helpers
 // --------------------------------------------------------------------
 function parseCookies(req) {
@@ -234,6 +362,25 @@ async function handleApi(req, res, pathname) {
       [session.user_id, body.state]
     );
     return sendJson(res, 200, { ok: true, updated_at: new Date().toISOString() });
+  }
+
+  // POST /api/voice — parse a Spanish voice note into structured items
+  if (pathname === '/api/voice' && req.method === 'POST') {
+    if (!session) return sendJson(res, 401, { error: 'no autenticado' });
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return sendJson(res, 503, { error: 'IA no configurada en el servidor (falta ANTHROPIC_API_KEY)' });
+    }
+    const body = await readJson(req);
+    if (!body || !body.text) return sendJson(res, 400, { error: 'text required' });
+    const text = String(body.text).slice(0, 5000).trim();
+    if (!text) return sendJson(res, 400, { error: 'text vacío' });
+    try {
+      const extracted = await parseVoiceNote(text);
+      return sendJson(res, 200, { extracted });
+    } catch (e) {
+      console.error('[voice] parse error:', e);
+      return sendJson(res, 500, { error: 'parse falló: ' + (e.message || 'unknown') });
+    }
   }
 
   // GET /api/health
