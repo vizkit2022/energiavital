@@ -873,18 +873,37 @@ async function doSync() {
   }
 }
 
-// Last-resort flush of pending changes when user closes/reloads the tab
-window.addEventListener('beforeunload', () => {
-  if (!isAuthenticated || !isDirty()) return;
+// Last-resort flush of pending changes when user closes/reloads/hides the tab.
+// iOS Safari is picky here: prefer sendBeacon (most reliable across mobile),
+// fall back to fetch keepalive. We also listen to pagehide and visibilitychange
+// since Safari often skips beforeunload on mobile.
+function flushSyncImmediate() {
+  if (!isAuthenticated) return;
+  if (!isDirty()) return;
+  const body = JSON.stringify({ state });
+  // Try sendBeacon first
+  if (navigator.sendBeacon) {
+    try {
+      const blob = new Blob([body], { type: 'application/json' });
+      const ok = navigator.sendBeacon('/api/state-beacon', blob);
+      if (ok) return;
+    } catch {}
+  }
+  // Fallback: fetch keepalive
   try {
     fetch('/api/state', {
       method: 'PUT',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ state }),
+      body,
       keepalive: true
     });
   } catch {}
+}
+window.addEventListener('beforeunload', flushSyncImmediate);
+window.addEventListener('pagehide', flushSyncImmediate);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushSyncImmediate();
 });
 function setSyncStatus(s) {
   const el = document.getElementById('syncStatus');
@@ -1761,6 +1780,29 @@ async function init() {
   }
 }
 
+// Helper: does this state object have any actual user-entered data?
+function hasMeaningfulState(s) {
+  if (!s || !Array.isArray(s.users) || s.users.length === 0) return false;
+  if (Array.isArray(s.days) && s.days.some(d =>
+    (Array.isArray(d.meals) && d.meals.length > 0) ||
+    (typeof d.sleepHours === 'number' && d.sleepHours > 0) ||
+    (d.exercise && d.exercise.pct > 0) ||
+    (d.relations && ((d.relations.circulo || 0) > 0 || (d.relations.otro || 0) > 0)) ||
+    (Array.isArray(d.yo) && d.yo.length > 0)
+  )) return true;
+  if (Array.isArray(s.goals) && s.goals.length > 0) return true;
+  return false;
+}
+function ensureStateShape() {
+  if (!state.users) state.users = [];
+  if (!state.days) state.days = [];
+  if (!state.goals) state.goals = [];
+  if (!state.settings) state.settings = {};
+  if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
+    if (state.users.length > 0) state.activeUserId = state.users[0].id;
+  }
+}
+
 async function bootApp() {
   // Load local cache first (for offline/fast initial paint)
   const loadedLocal = loadState();
@@ -1770,56 +1812,76 @@ async function bootApp() {
   // Pull canonical state from server.
   let serverState = null;
   let serverUpdatedAt = null;
+  let serverFetchOk = false;
   try {
     const r = await fetch('/api/state', { credentials: 'include' });
     if (r.ok) {
       const j = await r.json();
       serverState = j.state;
       serverUpdatedAt = j.updated_at ? new Date(j.updated_at).getTime() : null;
+      serverFetchOk = true;
     }
   } catch (e) { console.warn('Cloud fetch failed, using local cache.'); }
 
+  // If we couldn't reach the server, just load local and skip sync — never
+  // risk pushing partial/stale state on top of an unknown server.
+  if (!serverFetchOk) {
+    if (!loadedLocal || !state.users || state.users.length === 0) {
+      const namePart = (authUser.email || '').split('@')[0];
+      const cap = (authUser.name || namePart || 'Yo').charAt(0).toUpperCase() + (authUser.name || namePart || 'Yo').slice(1);
+      const u = createUser(cap, authUser.email);
+      state.activeUserId = u.id;
+    }
+    setSyncStatus('error');
+    viewDate = todayKey(); _lastDayCheck = viewDate;
+    renderUserPill(); render(); renderAvances(); refreshCircleSuggestions();
+    return;
+  }
+
+  const localMeaningful = loadedLocal && hasMeaningfulState(state);
+  const serverMeaningful = hasMeaningfulState(serverState);
   const localLastMod = state._lastModified || 0;
   const dirty = isDirty();
-  const serverHasData = !!(serverState && serverState.users && serverState.users.length > 0);
-  const localHasData = !!(loadedLocal && state.users && state.users.length > 0);
 
-  // Decide which side wins
-  // 1. If we have unsynced local changes (dirty) AND local is newer than server → push local, keep local
-  // 2. Else if server has data → use server (server is source of truth)
-  // 3. Else if local has data → use local, push to server
-  // 4. Else → fresh user, auto-create profile from auth email
-  if (dirty && localHasData && (!serverUpdatedAt || localLastMod > serverUpdatedAt)) {
-    // Local is newer; push it up
-    if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
-      state.activeUserId = state.users[0].id;
-    }
+  if (localMeaningful && !serverMeaningful) {
+    // Local has real data, server is empty/skeleton. Push local UP — never
+    // let an empty server state overwrite local data.
+    ensureStateShape();
     doSync();
-  } else if (serverHasData) {
-    state = serverState;
-    if (!state.users) state.users = [];
-    if (!state.days) state.days = [];
-    if (!state.goals) state.goals = [];
-    if (!state.settings) state.settings = {};
-    if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
-      state.activeUserId = state.users[0].id;
+  } else if (localMeaningful && serverMeaningful) {
+    // Both sides have data. Prefer the newer one.
+    if (dirty && localLastMod > (serverUpdatedAt || 0)) {
+      ensureStateShape();
+      doSync();
+    } else {
+      state = serverState;
+      ensureStateShape();
+      localStorage.setItem(LS_KEY, JSON.stringify(state));
+      clearDirty();
+      setSyncStatus('ok');
     }
+  } else if (serverMeaningful) {
+    // Only server has real data. Adopt it.
+    state = serverState;
+    ensureStateShape();
     localStorage.setItem(LS_KEY, JSON.stringify(state));
     clearDirty();
     setSyncStatus('ok');
-  } else if (localHasData) {
-    if (!state.activeUserId || !state.users.find(u => u.id === state.activeUserId)) {
-      state.activeUserId = state.users[0].id;
-    }
-    doSync(); // push local to server
+  } else if (loadedLocal && state.users && state.users.length > 0) {
+    // Local has user (but no real data), server is empty too. Keep local
+    // without syncing — first real action will create the server row.
+    ensureStateShape();
+    clearDirty();
   } else {
+    // Truly fresh. Create local user without triggering an empty PUT.
     const namePart = (authUser.email || '').split('@')[0];
     const cap = (authUser.name || namePart || 'Yo').charAt(0).toUpperCase() + (authUser.name || namePart || 'Yo').slice(1);
     const u = createUser(cap, authUser.email);
-    setActiveUser(u.id);
+    state.activeUserId = u.id;
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {}
+    clearDirty();
   }
 
-  // Reset viewDate to today on boot (in case user reopens after midnight)
   viewDate = todayKey();
   _lastDayCheck = viewDate;
 

@@ -348,8 +348,8 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { state: r.rows[0].state, updated_at: r.rows[0].updated_at });
   }
 
-  // PUT /api/state
-  if (pathname === '/api/state' && req.method === 'PUT') {
+  // PUT /api/state  (and POST alias for navigator.sendBeacon)
+  if (pathname === '/api/state' && (req.method === 'PUT' || req.method === 'POST')) {
     if (!session) return sendJson(res, 401, { error: 'no autenticado' });
     const body = await readJson(req);
     if (!body || typeof body.state !== 'object' || body.state === null) {
@@ -362,6 +362,21 @@ async function handleApi(req, res, pathname) {
       [session.user_id, body.state]
     );
     return sendJson(res, 200, { ok: true, updated_at: new Date().toISOString() });
+  }
+  // POST /api/state-beacon  (alias for sendBeacon — needs a POST endpoint)
+  if (pathname === '/api/state-beacon' && req.method === 'POST') {
+    if (!session) return sendJson(res, 401, { error: 'no autenticado' });
+    const body = await readJson(req);
+    if (!body || typeof body.state !== 'object' || body.state === null) {
+      return sendJson(res, 400, { error: 'state required' });
+    }
+    await pool.query(
+      `INSERT INTO app_state (user_id, state, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()`,
+      [session.user_id, body.state]
+    );
+    return sendJson(res, 200, { ok: true });
   }
 
   // POST /api/voice — parse a Spanish voice note into structured items
