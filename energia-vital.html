@@ -520,7 +520,12 @@ footer a:hover { color: var(--text); }
 <div class="view" id="view-avances">
   <header class="avances-header">
     <h1><span>📋</span> Avances diarios</h1>
-    <div class="date" id="avancesDate"></div>
+    <div class="date-nav">
+      <button class="date-arrow" id="avPrev" onclick="changeViewDate(-1)" title="Día anterior">‹</button>
+      <span class="date" id="avancesDate"></span>
+      <button class="date-arrow" id="avNext" onclick="changeViewDate(1)" title="Día siguiente">›</button>
+    </div>
+    <button class="back-today" id="avBackToday" onclick="goToToday()" style="display:none">↩ Volver a hoy</button>
   </header>
   <div class="stats-row" id="avancesStats"></div>
   <div class="add-card">
@@ -548,7 +553,7 @@ footer a:hover { color: var(--text); }
   </div>
   <div class="goals-card">
     <div class="goals-header">
-      <h3>Hoy</h3>
+      <h3 id="goalsListTitle">Hoy</h3>
       <div class="filter-chips">
         <button class="chip active" data-filter="all" onclick="setFilter('all')">Todos</button>
         <button class="chip" data-filter="open" onclick="setFilter('open')">Pendientes</button>
@@ -1015,7 +1020,7 @@ function setFilter(f) { goalFilter = f; document.querySelectorAll('.filter-chips
 function addGoal() {
   const text = document.getElementById('goalText').value.trim();
   if (!text) return;
-  const goal = { id: uid('g'), userId: state.activeUserId, text, category: goalDraft.category || 'trabajo', importance: goalDraft.importance || 'importante', completed: false, createdAt: new Date().toISOString(), completedAt: null, date: todayKey() };
+  const goal = { id: uid('g'), userId: state.activeUserId, text, category: goalDraft.category || 'trabajo', importance: goalDraft.importance || 'importante', completed: false, createdAt: new Date().toISOString(), completedAt: null, date: viewDate };
   state.goals.push(goal);
   document.getElementById('goalText').value = '';
   goalDraft = { category: null, importance: null };
@@ -1386,22 +1391,25 @@ function switchView(view) {
 }
 
 // Day navigation
+function rerenderCurrent() {
+  if (currentView === 'energia') render();
+  else if (currentView === 'avances') renderAvances();
+}
 function changeViewDate(delta) {
   const d = dateFromKey(viewDate);
   d.setDate(d.getDate() + delta);
   const nextKey = dateKeyOf(d);
   if (nextKey > todayKey()) return; // no future
   viewDate = nextKey;
-  render();
+  rerenderCurrent();
 }
 function goToToday() {
   viewDate = todayKey();
-  render();
+  rerenderCurrent();
 }
 function jumpToDate(k) {
   if (!k || k > todayKey()) return;
   viewDate = k;
-  render();
   switchView('energia');
 }
 
@@ -1517,14 +1525,27 @@ function renderHistory() {
 }
 
 function renderAvances() {
-  document.getElementById('avancesDate').textContent = new Date().toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  const todayGoals = getGoalsForDate(todayKey());
+  const viewDateObj = dateFromKey(viewDate);
+  document.getElementById('avancesDate').textContent =
+    viewDateObj.toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+  // Day-nav buttons
+  const isToday = viewDate === todayKey();
+  const avNext = document.getElementById('avNext');
+  const avBack = document.getElementById('avBackToday');
+  if (avNext) avNext.disabled = isToday;
+  if (avBack) avBack.style.display = isToday ? 'none' : 'inline-block';
+  const titleEl = document.getElementById('goalsListTitle');
+  if (titleEl) titleEl.textContent = isToday ? 'Hoy' : viewDateObj.toLocaleDateString('es', { day: 'numeric', month: 'long' });
+
+  const todayGoals = getGoalsForDate(viewDate);
   const completed = todayGoals.filter(g => g.completed).length;
   const byCat = { trabajo: 0, personal: 0, familia: 0, vida: 0 };
   const byImp = { vital: 0, importante: 0, noimp: 0 };
   for (const g of todayGoals) if (g.completed) { byCat[g.category]++; byImp[g.importance]++; }
+  const dayWord = isToday ? 'hoy' : 'ese día';
   document.getElementById('avancesStats').innerHTML = `
-    <div class="stat"><b>${completed}</b> cumplidos hoy</div>
+    <div class="stat"><b>${completed}</b> cumplidos ${dayWord}</div>
     <div class="stat"><span class="pip trabajo"></span> Trabajo <b>${byCat.trabajo}</b></div>
     <div class="stat"><span class="pip personal"></span> Personal <b>${byCat.personal}</b></div>
     <div class="stat"><span class="pip familia"></span> Familia <b>${byCat.familia}</b></div>
