@@ -1194,12 +1194,63 @@ async function tryLogin() {
 async function logout() {
   closeUserMenu();
   if (!confirm('¿Cerrar sesión?')) return;
+
+  // Cancel any pending sync immediately so we don't PUT during teardown
+  clearTimeout(_syncTimer); _syncTimer = null; _syncing = false;
+
+  // Tell server to invalidate the session (best effort)
   try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch {}
-  // Clear sensitive local state too
-  localStorage.removeItem(LS_KEY);
+
+  // Reset all client-side auth + state
   isAuthenticated = false;
   authUser = null;
-  window.location.reload();
+  state = createEmptyState();
+  viewDate = todayKey();
+  goalDraft = { category: null, importance: null };
+  goalFilter = 'all';
+
+  // Clear ALL related localStorage keys (incl. legacy ones from older versions)
+  const toRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k === LS_KEY || k === DIRTY_KEY || k.startsWith('energia_vital') || k.startsWith('ev_')) {
+      toRemove.push(k);
+    }
+  }
+  for (const k of toRemove) localStorage.removeItem(k);
+
+  // Hide all views and modals
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.modal').forEach(m => m.classList.remove('show'));
+
+  // Reset user pill placeholders so we don't flash the previous user's name
+  const av = document.getElementById('userAvatar'); if (av) av.textContent = '·';
+  const pn = document.getElementById('userPillName'); if (pn) pn.textContent = '—';
+  const dn = document.getElementById('ddName'); if (dn) dn.textContent = '—';
+  const de = document.getElementById('ddEmail'); if (de) de.textContent = '—';
+  const tEl = document.getElementById('ddTier'); if (tEl) { tEl.textContent = 'Free'; tEl.classList.remove('pro'); }
+
+  // Hide sync status indicator
+  setSyncStatus('idle');
+
+  // Make Energía the default view that appears once they log back in
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === 'energia'));
+  document.getElementById('view-energia').classList.add('active');
+  currentView = 'energia';
+
+  // Open the login modal directly — no full page reload needed
+  openModal('authLoginModal');
+  setTimeout(() => {
+    const emailField = document.getElementById('authEmail');
+    if (emailField) { emailField.value = ''; emailField.focus(); }
+    const pwField = document.getElementById('authPassword');
+    if (pwField) pwField.value = '';
+    const errEl = document.getElementById('authError');
+    if (errEl) errEl.style.display = 'none';
+  }, 100);
+
+  toast('Sesión cerrada.');
 }
 
 // ====================================================================

@@ -1,5 +1,5 @@
 // Energía Vital — Service Worker
-const CACHE_NAME = 'energia-vital-v1';
+const CACHE_NAME = 'viveapp-v3';
 const ASSETS = [
   './',
   './index.html',
