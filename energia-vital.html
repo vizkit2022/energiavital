@@ -810,36 +810,20 @@ let goalFilter = 'all';
 function createEmptyState() {
   return { version: 3, users: [], activeUserId: null, days: [], goals: [], settings: {} };
 }
-function loadState() {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return false;
-    const parsed = JSON.parse(raw);
-    state = parsed;
-    if (!state.version) state.version = 3;
-    if (!state.users) state.users = [];
-    if (!state.days) state.days = [];
-    if (!state.goals) state.goals = [];
-    if (!state.settings) state.settings = {};
-    return true;
-  } catch (e) { console.warn('Load state failed:', e); return false; }
-}
-const DIRTY_KEY = LS_KEY + '_dirty';
-function markDirty() { localStorage.setItem(DIRTY_KEY, '1'); }
-function clearDirty() { localStorage.setItem(DIRTY_KEY, '0'); }
-function isDirty() { return localStorage.getItem(DIRTY_KEY) === '1'; }
+// DB-only architecture: localStorage is no longer used for state.
+// Each page load fetches the canonical state from /api/state.
+function loadState() { return false; }
+// In-memory dirty flag — DB is source of truth, no localStorage involved.
+let _pendingSync = false;
+function markDirty() { _pendingSync = true; }
+function clearDirty() { _pendingSync = false; }
+function isDirty() { return _pendingSync; }
 
 function saveState() {
-  try {
-    state._lastModified = Date.now();
-    localStorage.setItem(LS_KEY, JSON.stringify(state));
-    markDirty();
-    writeBackup();           // optional: file backup if folder connected
-    syncStateToServer();     // debounced cloud sync
-  } catch (e) {
-    console.error('Save state failed:', e);
-    toast('Error al guardar. Espacio lleno?');
-  }
+  state._lastModified = Date.now();
+  markDirty();
+  writeBackup();           // optional: FSA file backup (independent of state cache)
+  syncStateToServer();     // debounced PUT to /api/state
 }
 
 // ---- Cloud sync (Postgres via /api/state) ----
@@ -1311,16 +1295,16 @@ async function logout() {
   goalDraft = { category: null, importance: null };
   goalFilter = 'all';
 
-  // Clear ALL related localStorage keys (incl. legacy ones from older versions)
-  const toRemove = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (!k) continue;
-    if (k === LS_KEY || k === DIRTY_KEY || k.startsWith('energia_vital') || k.startsWith('ev_')) {
-      toRemove.push(k);
+  // Clean up any legacy localStorage keys from older versions of the app.
+  // (Current version doesn't use localStorage for state; DB is source of truth.)
+  try {
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('energia_vital') || k.startsWith('ev_'))) toRemove.push(k);
     }
-  }
-  for (const k of toRemove) localStorage.removeItem(k);
+    for (const k of toRemove) localStorage.removeItem(k);
+  } catch {}
 
   // Hide all views and modals
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -1804,86 +1788,56 @@ function ensureStateShape() {
 }
 
 async function bootApp() {
-  // Load local cache first (for offline/fast initial paint)
-  const loadedLocal = loadState();
-  dirHandle = await getHandle();
-  updateBackupStatus();
+  // DB-only: ALWAYS fetch the canonical state from the server. No localStorage
+  // cache, no merge logic, no risk of cross-device drift.
+  setSyncStatus('syncing');
 
-  // Pull canonical state from server.
   let serverState = null;
-  let serverUpdatedAt = null;
   let serverFetchOk = false;
   try {
-    const r = await fetch('/api/state', { credentials: 'include' });
+    const r = await fetch('/api/state', { credentials: 'include', cache: 'no-store' });
+    if (r.status === 401) { handleSessionExpired(); return; }
     if (r.ok) {
       const j = await r.json();
       serverState = j.state;
-      serverUpdatedAt = j.updated_at ? new Date(j.updated_at).getTime() : null;
       serverFetchOk = true;
     }
-  } catch (e) { console.warn('Cloud fetch failed, using local cache.'); }
+  } catch (e) { console.warn('Cloud fetch failed:', e); }
 
-  // If we couldn't reach the server, just load local and skip sync — never
-  // risk pushing partial/stale state on top of an unknown server.
   if (!serverFetchOk) {
-    if (!loadedLocal || !state.users || state.users.length === 0) {
-      const namePart = (authUser.email || '').split('@')[0];
-      const cap = (authUser.name || namePart || 'Yo').charAt(0).toUpperCase() + (authUser.name || namePart || 'Yo').slice(1);
-      const u = createUser(cap, authUser.email);
-      state.activeUserId = u.id;
-    }
+    // Couldn't reach the server. Show error and offer manual retry.
     setSyncStatus('error');
-    viewDate = todayKey(); _lastDayCheck = viewDate;
-    renderUserPill(); render(); renderAvances(); refreshCircleSuggestions();
+    document.body.innerHTML = `
+      <div style="padding: 60px 24px; text-align: center; font-family: 'Nunito', system-ui;">
+        <div style="font-size: 40px; margin-bottom: 12px;">📡</div>
+        <h2 style="margin-bottom: 8px;">Sin conexión</h2>
+        <p style="color: #8a8492; margin-bottom: 20px;">No pude cargar tu data desde el server.</p>
+        <button onclick="location.reload()" style="padding: 12px 24px; background: #797084; color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;">Reintentar</button>
+      </div>`;
     return;
   }
 
-  const localMeaningful = loadedLocal && hasMeaningfulState(state);
-  const serverMeaningful = hasMeaningfulState(serverState);
-  const localLastMod = state._lastModified || 0;
-  const dirty = isDirty();
-
-  if (localMeaningful && !serverMeaningful) {
-    // Local has real data, server is empty/skeleton. Push local UP — never
-    // let an empty server state overwrite local data.
-    ensureStateShape();
-    doSync();
-  } else if (localMeaningful && serverMeaningful) {
-    // Both sides have data. Prefer the newer one.
-    if (dirty && localLastMod > (serverUpdatedAt || 0)) {
-      ensureStateShape();
-      doSync();
-    } else {
-      state = serverState;
-      ensureStateShape();
-      localStorage.setItem(LS_KEY, JSON.stringify(state));
-      clearDirty();
-      setSyncStatus('ok');
-    }
-  } else if (serverMeaningful) {
-    // Only server has real data. Adopt it.
+  if (serverState && Array.isArray(serverState.users) && serverState.users.length > 0) {
+    // Adopt server state directly. Server is source of truth.
     state = serverState;
     ensureStateShape();
-    localStorage.setItem(LS_KEY, JSON.stringify(state));
-    clearDirty();
-    setSyncStatus('ok');
-  } else if (loadedLocal && state.users && state.users.length > 0) {
-    // Local has user (but no real data), server is empty too. Keep local
-    // without syncing — first real action will create the server row.
-    ensureStateShape();
-    clearDirty();
   } else {
-    // Truly fresh. Create local user without triggering an empty PUT.
+    // First-time login — server has no app state for this user yet.
+    // Create the internal app user from auth email (in memory only).
+    // Do NOT sync yet; let the first real user action push the initial row.
     const namePart = (authUser.email || '').split('@')[0];
     const cap = (authUser.name || namePart || 'Yo').charAt(0).toUpperCase() + (authUser.name || namePart || 'Yo').slice(1);
     const u = createUser(cap, authUser.email);
     state.activeUserId = u.id;
-    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {}
-    clearDirty();
   }
+
+  clearDirty();
+  setSyncStatus('ok');
 
   viewDate = todayKey();
   _lastDayCheck = viewDate;
+  dirHandle = await getHandle();
+  updateBackupStatus();
 
   renderUserPill();
   render();
